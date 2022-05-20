@@ -1,0 +1,430 @@
+---
+title: "Used Car Price Prediction"
+author: "Dallas Hutchinson"
+date: "4/18/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+# Import necessary libraries
+library(TeachingDemos)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(GGally)
+library(randomForest)
+library(regclass)
+library(e1071)
+library(Metrics)
+library(caret)
+library(reshape2)
+library(performance)
+```
+
+
+
+```{r, echo=TRUE}
+# Import used car price dataset
+data <- read.csv("train-data.csv", header = TRUE)
+head(data)
+```
+
+# Cleaning Name, Location, Year, and Kilometers Driven columns
+
+``` {r}
+# Finding the Normality for "Name" variable using Bar plot
+
+barplot(table(data$Name),
+main="Make/Model of Car",
+xlab="Name",
+ylab="Count",
+border="red",
+col="blue",
+density=20)
+```
+
+``` {r, echo=TRUE}
+# Finding the Normality for "Location" variable using Bar plot
+
+barplot(table(data$Location),
+main="Where are the used cars being sold?",
+xlab="Location",
+ylab="Count",
+border="red",
+col="blue",
+density=20)
+
+# Change Location into a factor
+data$Location <- as.factor(data$Location)
+```
+
+``` {r, echo=TRUE}
+# Finding the Normality for "Year" variable using Bar plot
+
+barplot(table(data$Year),
+main="Year of Used Car",
+xlab="Year",
+ylab="Count",
+border="red",
+col="blue",
+density=20)
+```
+``` {r}
+# Finding the Normality for "Kilometers Driven" variable using Bar plot
+
+barplot(table(data$Kilometers_Driven),
+main="KM Driven by Car",
+xlab="Kilometers Driven",
+ylab="Count",
+border="red",
+col="blue",
+density=20)
+```
+
+# Cleaning Fuel Type, Transmission, Owner Type, and Mileage columns
+
+``` {r}
+# checking for NA values
+colSums(is.na(data))
+
+# Checking the unique values in Fuel Type
+unique(data$Fuel_Type)
+
+# Checking the unique values in Transmission
+unique(data$Transmission)
+
+# Checking the unique values in Owner Type
+unique(data$Owner_Type)
+
+### Owner Type column analysis
+# Bar plot for unique values in Owner Type
+ggplot(data, aes(x=reorder(Owner_Type, Owner_Type, function(x)-length(x)))) +
+geom_bar(fill='blue') +  labs(x='Owner Type')
+# Majority of cars being sold are from first owner
+
+# Change Owner Type to a factor
+data$Owner_Type <- as.factor(data$Owner_Type)
+
+# Box plot for unique values in Owner Type
+ggplot(data, aes(x=Owner_Type, y=Price)) +  geom_boxplot(fill='green')
+# Very high number of outliers in "Price" target is skewing the boxplots
+```
+
+``` {r}
+### Transmission column analysis
+# Bar plot for unique values in Transmission
+ggplot(data, aes(x=reorder(Transmission, Transmission, function(x)-length(x)))) +
+geom_bar(fill='blue') +  labs(x='Transmission')
+# Most used cars are of manual transmission with about 2.5:1 ratio to automatic transmision
+
+# Box plot for unique values in Transmission
+ggplot(data, aes(x=Transmission, y=Price)) +  geom_boxplot(fill='green')
+# Outliers skewing boxplots again but automatic cars seem to have significantly higher prices than manual
+
+# Change Transmission to factor
+data$Transmission <- as.factor(data$Transmission)
+```
+
+``` {r}
+### Fuel Type column analysis
+# Bar plot for unique values in Fuel Type
+ggplot(data, aes(x=reorder(Fuel_Type, Fuel_Type, function(x)-length(x)))) +
+geom_bar(fill='blue') +  labs(x='Fuel Type')
+# Petrol and Diesel make up nearly all cars
+
+# Box plot for unique values in Fuel Type
+ggplot(data, aes(x=Fuel_Type, y=Price)) +  geom_boxplot(fill='green')
+# Diesel prices seem to have larger variation than Petrol cars
+
+# Change Fuel Type to a factor
+data$Fuel_Type <- as.factor(data$Fuel_Type)
+```
+
+``` {r, echo=TRUE}
+### Mileage column clean-up
+# Spliting the Mileage column into two seperate column one with the Units and other with value
+data[c('Mileage', 'Units')] <- str_split_fixed(data$Mileage, ' ', 2)
+
+# Remove rows where Units are km/kg due to inability to convert all to same units
+data <- data[!(data$Units=="km/kg"),]
+
+# Change data type of the Mileage column
+data$Mileage <- as.numeric(data$Mileage)
+
+# Droping the unwanted Units column since all are now kmpl
+data <- select (data,-c(Units))
+data[data$Mileage==0,]
+
+# Checking Normality for Mileage Column 
+hist(data$Mileage, col='steelblue', main='Distribution of Mileage',breaks = 20)
+```
+
+## Cleaning Engine, Power, Seats, and Price columns
+
+
+```{r, echo=TRUE}
+# Changing empty string values to NA
+data$Engine[data$Engine==""] <- NA
+data$Power[data$Power==""] <- NA
+
+# Removing the CC label from Engine variable and converting the column to numeric type
+data$Engine <- sub(" CC", "", data$Engine)
+data$Engine <- type.convert(data$Engine, as.is = TRUE)
+
+# Removing the bhp label from Power variable and converting the column to numeric type
+data$Power <- sub(" bhp", "", data$Power)
+data$Power[data$Power=="null"] <- NA
+data$Power <- type.convert(data$Power, as.is = TRUE)
+
+# Checking distribution of Seats variable
+data %>% 
+  group_by(Seats) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = round(count / sum(count), 3)) %>% 
+  arrange(desc(perc))
+# Since Seats variable is 83.3% 5 seat cars, consider refactoring
+# Could either group Seats to <= 5 and > 5 OR == 5 and != 5
+
+# Filter out rows in the dataset where Seats variable is NA
+# Also refactor Seats variable into two groups: "5 or less" and "6+". Set this variable as a factor
+data <- data %>% filter(!is.na(data$Seats))
+data$Seats_grp <- cut(data$Seats,
+                      breaks = c(-Inf, 6, Inf),
+                      labels = c("<= 5", "6+"),
+                      right = FALSE)
+
+data %>% 
+  group_by(Seats_grp) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = round(count / sum(count), 3)) %>% 
+  arrange(desc(perc))
+
+# Since there are rows with 0 as the 'Mileage' we will impute the median Mileage for those rows, assuming
+# that a 0 mileage car is impossible
+data$Mileage[data$Mileage==0] <- median(data$Mileage, na.rm = T)
+
+
+# Taking a look at the target variable, Price
+# Price column is alright set as numeric type
+ggplot(data, aes(x=Price)) + 
+  geom_histogram(aes(y=..density..), bins=100, color='black', fill="dodgerblue") +
+  theme_minimal() + labs(title = "Target variable 'Price' is right-skewed", y = "Frequency") +
+  geom_density(col=2)
+# Price data is heavily right-skewed
+
+# What percentage of rows actually contain data on the "New_Price" attribute?
+nrow(data[data$New_Price != "",]) / nrow(data) * 100
+# Only 13.78%
+
+# Dropping index and New Price columns since both will not be used in our analysis
+data <- select(data,-c(X, New_Price))
+
+# Removing any row that contains >= 1 NA value
+data <- na.omit(data)
+```
+
+``` {r fig.height=7, fig.width=9, echo=TRUE}
+ggpairs(data, columns = c("Year", "Kilometers_Driven", "Mileage", "Power", "Price"))
+ggplot(data = data[data$Year >= 2008,], aes(Year, Mileage, color=Fuel_Type, shape=Transmission)) + geom_point()
+```
+
+``` {r, echo=TRUE}
+cormat <- round(cor(data[,c("Year","Kilometers_Driven","Mileage","Engine","Power","Price")]),2)
+# Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+upper_tri <- get_upper_tri(cormat)
+melted_cormat <- melt(upper_tri, na.rm = T)
+# Make the heatmap with correlations
+heatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value)) +
+            geom_tile(color = "white") +
+            scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+            midpoint = 0, limit = c(-1,1), space = "Lab", 
+            name="Pearson\nCorrelation") +
+            theme_minimal() +
+            theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+            size = 12, hjust = 1)) +
+            coord_fixed()
+heatmap +
+geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal") +
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+```
+
+
+# Split dataset into train and test set in preparation for regression modeling
+
+``` {r, echo=TRUE}
+## Splitting the dataset into training and testing
+
+set.seed(char2seed("Used Cars"))
+training = sample(nrow(data), round(nrow(data)*(3/4)))
+usedCarTrain <- data[training,]
+nrow(usedCarTrain)
+usedCarTrain <- usedCarTrain %>% select(-c(Name, Seats))
+usedCarTest <- data[-training,]
+nrow(usedCarTest)
+usedCarTest <- usedCarTest %>% select(-c(Name, Seats))
+```
+
+``` {r}
+## Calculation of R-Squared value
+Rsq <- function (tstPrd, tstAct) {
+  sse <- sum((tstAct-tstPrd)^2)
+  sst <- sum((tstAct-mean(tstAct))^2)
+  return (1 - sse/sst)
+}
+```
+
+
+``` {r, echo=TRUE}
+## Simple linear model 
+UsedCarLM <- lm(Price ~ Year+Mileage+Power+Transmission+Location+Engine, data = usedCarTrain)
+UsedCarLM_Rsq <- Rsq(predict(UsedCarLM, usedCarTest), usedCarTest$Price)
+UsedCarLM_Rsq
+summary(UsedCarLM)
+plot(UsedCarLM)
+## The linear regression model seems to be a good fit here overall. The R-squared value we obtained is 0.72 which is a good start for linear regression. Based on the Normal Q-Q plot, the error points seem to be distributed normally. However, few of the variables are not distributed normal, The Residual and leverage have the higher values with few outliers.
+```
+
+``` {r, echo=TRUE}
+## Multi-collinearity checks
+VIF(UsedCarLM)
+## As we see here, there is high VIF for couple of factors which show high collinearity among other predictors.But, as a whole, they are making a great combination to predict the price of a car.
+```
+
+```{r fig.height=10, fig.width=10, echo=TRUE}
+# More linear regression evaluation and assumption checks
+model_performance(UsedCarLM)
+
+# Creates relevant graphs
+check_model(UsedCarLM)
+```
+
+``` {r, echo=TRUE}
+## Random Forest Regressor Model
+set.seed(char2seed("Used Cars"))
+ntrees <- round(2^seq(1,11))
+rf.results <- matrix (rep(0,2*length(ntrees)), nrow=length(ntrees))
+colnames (rf.results) <- c("ntrees", "OOB")
+rf.results[,"ntrees"] <- ntrees
+rf.results[,"OOB"] <- 0
+
+iter <- 1
+for (nt in ntrees){ 
+  # build random forest model
+  model.rf1 <- randomForest(log(Price) ~ ., data=usedCarTrain, ntree=nt, proximity=FALSE)
+  
+  # get the OOB assign it to newly created matrix
+  rf.results[iter, "OOB"] <- (sum(abs(exp(predict(model.rf1, 
+                                            newdata = usedCarTest)) - usedCarTrain[,10]) /
+                                            nrow(usedCarTrain)))
+  iter <- iter+1
+}
+rf.results
+
+
+oob.err=double(10)
+test.err=double(10)
+
+for(mtry in 1:10) {
+  rf = randomForest(log(Price) ~ . , data = usedCarTrain, mtry=mtry, ntree=256) 
+  oob.err[mtry] = rf$mse[256] 
+  
+  pred <- exp(predict(rf, usedCarTest)) # Predictions on Test Set
+  test.err[mtry] = with(usedCarTest, mean( (Price - pred)^2)) # Mean Squared Test Error
+  
+}
+test.err # Lowest test error is mtry = 6
+oob.err # Lowest OOB error is mtry = 4
+
+set.seed(char2seed("Used Cars"))
+model.rf <- randomForest (log(Price) ~ ., data = usedCarTrain, mtry = 6, ntree = 250, proximity = FALSE, importance = TRUE)
+plot(model.rf)
+model.rf # R^2 value is 0.9376
+
+sqrt(exp(model.rf$mse[which.min(model.rf$mse)]))
+rmse_rf = round(sqrt(exp(model.rf$mse[which.min(model.rf$mse)])),2)
+
+# Plotting actual vs predicted values of Price
+ggplot(data=usedCarTest, aes(x=Price, y=exp(predict(model.rf, newdata=usedCarTest)))) +
+  geom_point(color="dodgerblue") + theme_minimal() + geom_smooth() + 
+  labs(title="Actual vs. Predicted Values (Random Forest)", y="Predicted Price", x="Actual Price", 
+       subtitle = paste0("RMSE: ",rmse_rf, " INR lakhs"))
+
+# Independent Variable importance to the model
+importance(model.rf)
+varImpPlot(model.rf, sort=TRUE, main="Feature Importance - Random Forest")
+# %IncMSE is most robust and useful measure here, the higher the value the better, it is the mean decrease
+# in accuracy which shows how much our model accuracy decreases if we leave out that variable
+```
+
+``` {r, echo=TRUE}
+Loc <- dummyVars(" ~ Location", data=data)
+df <- cbind(data, data.frame(predict(Loc, newdata=data)))
+
+fuel <- dummyVars(" ~ Fuel_Type", data=df)
+df <- cbind(df, data.frame(predict(fuel, newdata=df)))
+
+trans <- dummyVars(" ~ Transmission", data=df)
+df <- cbind(df, data.frame(predict(trans, newdata=df)))
+
+owner <- dummyVars(" ~ Owner_Type", data=df)
+df <- cbind(df, data.frame(predict(owner, newdata=df)))
+
+seats <- dummyVars(" ~ Seats_grp", data=df)
+df <- cbind(df, data.frame(predict(seats, newdata=df)))
+
+set.seed(char2seed("Used Cars"))
+training = sample(nrow(df), round(nrow(df)*(3/4)))
+usedCarTrain <- df[training,]
+nrow(usedCarTrain)
+usedCarTest <- df[-training,]
+nrow(usedCarTest)
+
+#training the model
+model_svm <- svm(Price ~ Year + Kilometers_Driven + Mileage + Engine + Location.Ahmedabad + Location.Bangalore + Location.Chennai + Location.Coimbatore + Location.Delhi + Location.Hyderabad + Location.Jaipur + Location.Kochi + Location.Kolkata + Location.Mumbai + Location.Pune + Fuel_Type.Diesel + Fuel_Type.Petrol + Transmission.Automatic + Transmission.Manual + Owner_Type.First +  Owner_Type.Fourth...Above + Owner_Type.Second + Owner_Type.Third + Seats_grp....5 + Seats_grp.6., data = usedCarTrain)
+```
+
+
+``` {r, echo=TRUE}
+# summary of the SVM model
+summary(model_svm)
+
+# Predicting the price on the test set using SVM model
+pred <- predict(model_svm,usedCarTest)
+
+# Calculating R2 value
+cor(usedCarTest$Price,pred)^2
+Rsq(pred, usedCarTest$Price)
+
+# Calculating the RMSE value
+RMSE <- rmse(usedCarTest$Price,pred)
+RMSE
+```
+
+``` {r}
+plot(x=pred, y= usedCarTest$Price,
+     xlab='Predicted Values',
+     ylab='Actual Values',
+     main='Predicted vs. Actual Values')
+abline(a=0, b=1)
+```
+
