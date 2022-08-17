@@ -1,5 +1,5 @@
 # Used Car Price Prediction
-View R Markdown file for code.
+See R code [here](usedcar_price_prediction.Rmd) and full report [here](Data_Analytics_Report_Group1.pdf)
 
 ![alt text](https://github.com/dallas-hutch/Used-Car-Prices/blob/main/images/0001.jpg)
 ![alt text](https://github.com/dallas-hutch/Used-Car-Prices/blob/main/images/0002.jpg)
